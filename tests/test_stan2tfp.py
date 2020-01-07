@@ -26,11 +26,11 @@ class TestStan2tfp(unittest.TestCase):
         data_dict = dict(
             J=8, y=[28, 8, -3, 7, -1, 1, 18, 12], sigma=[15, 10, 16, 11, 9, 11, 10, 18]
         )
-        model = Stan2tfp(stan_file_path=
-            pkg_resources.resource_filename(
+        model = Stan2tfp(
+            stan_file_path=pkg_resources.resource_filename(
                 __name__, "../tests/eight_schools_ncp.stan"
             ),
-            data_dict=data_dict
+            data_dict=data_dict,
         )
         mcmc_trace, _ = model.sample()
         mu, tau, theta_tilde = [model.merge_chains(x) for x in mcmc_trace]
@@ -67,10 +67,7 @@ model {
   y ~ normal(theta, sigma);
 }
         """
-        model = Stan2tfp(stan_model_code=
-            stan_code,
-            data_dict=data_dict
-        )
+        model = Stan2tfp(stan_model_code=stan_code, data_dict=data_dict)
         mcmc_trace, _ = model.sample()
         mu, tau, theta_tilde = [model.merge_chains(x) for x in mcmc_trace]
 
