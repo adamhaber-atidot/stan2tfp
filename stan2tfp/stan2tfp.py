@@ -1,21 +1,48 @@
 # -*- coding: utf-8 -*-
 from subprocess import run, PIPE
 import os
-import pkg_resources
+
+# import pkg_resources
 import sys
 import tempfile
+import pathlib
 
 import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
+import urllib
 
-tfd = tfp.distributions
-tfb = tfp.bijectors
 dtype = tf.float64
+compiler_path = pathlib.Path(__file__).parent.absolute() / "stan2tfp_compiler.exe"
 
-class Stan2tfp():
-    
-    slots = ['compiler_path','tfp_code','stan_model_code','parameter_shapes','parameter_bijectors', 'model','model_constructor']
+
+def download_stan2tfp_compiler():
+    plat = sys.platform
+
+    if plat not in ["darwin", "linux", "win32"]:
+        raise OSError("OS {} is not supported".format(plat))
+    if plat == "darwin":
+        plat = "mac"
+    url = (
+        f"https://github.com/stan-dev/stanc3/releases/download/nightly/{plat}-stan2tfp"
+    )
+    print("Downloading the latest stan2tfp compiler...")
+    urllib.request.urlretrieve(url, compiler_path)
+    os.chmod(compiler_path, 755)
+    print("Download complete, saved to: " + str(compiler_path))
+
+
+class Stan2tfp:
+
+    slots = [
+        "compiler_path",
+        "tfp_code",
+        "stan_model_code",
+        "parameter_shapes",
+        "parameter_bijectors",
+        "model",
+        "model_constructor",
+    ]
 
     def __init__(self, stan_file_path=None, stan_model_code=None, data_dict=None):
         """Construct a TensorFlow Probability model from a Stan model.
@@ -42,35 +69,41 @@ class Stan2tfp():
             If both stan_file_path and stan_model_code are None.
         FileNotFoundError
             If stan_file_path is not a valid path.
-        """        
+        """
         super().__init__()
         self.parameter_shapes = None
         self.parameter_bijectors = None
-        self._set_compiler_path()
+        self.model = None
+
+        self.compiler_path = compiler_path
+        # self._set_compiler_path()
+        if not compiler_path.exists():
+            print("stan2tfp compiler not found, downloading...")
+            download_stan2tfp_compiler()
 
         # call the compiler
         if stan_file_path is None:
             if stan_model_code is None:
-                raise ValueError("Either stan_model_code or stan_file_path must be provided to create a Model object")
+                raise ValueError(
+                    "Either stan_model_code or stan_file_path must be provided to create a Model object"
+                )
             else:
                 self.stan_model_code = stan_model_code
                 self.tfp_code = self._tfp_from_stan_model_code(stan_model_code)
         else:
             if not os.path.exists(stan_file_path):
                 raise FileNotFoundError(stan_file_path)
-            with open(stan_file_path, 'r') as f:
+            with open(stan_file_path, "r") as f:
                 self.stan_model_code = f.read()
             self.tfp_code = self._tfp_from_stan_file(stan_file_path)
-        
+
         # execute tfp_code in the current namespace
         exec_dict = {}
         exec(self.tfp_code, exec_dict)
         self.model_constructor = exec_dict["model"]
 
         if data_dict is not None:
-            self.model = self.model_constructor(**data_dict)
-        else:
-            self.model = None
+            self.init_model(data_dict)
 
     def init_model(self, data_dict):
         """Instantiate a TFP model with data. Initialization is required for sampling.  
@@ -83,7 +116,7 @@ class Stan2tfp():
 
             If data has been passed previously (by the constructor or the init_model function),
             it will be overwritten. This is useful for calling the same model with different data.
-        """        
+        """
         self.model = self.model_constructor(**data_dict)
         self.parameter_bijectors = self.model.parameter_bijectors()
         self.parameter_shapes = self.model.parameter_shapes(1)
@@ -108,9 +141,11 @@ class Stan2tfp():
         (mcmc_trace, pkr) : tuple
             mcmc_trace - a list samples drawn from the model
             pkr (previous kernel results) - a dictionary of sampler statistics as defined by trace_fn 
-        """      
+        """
         if self.model is None:
-            return ValueError("The model class has not been instantiated. Call init_model with the the observed data.")
+            return ValueError(
+                "The model class has not been instantiated. Call init_model with the the observed data."
+            )
 
         initial_states = [
             tf.random.uniform(s, -2, 2, dtype, name="initializer")
@@ -119,7 +154,8 @@ class Stan2tfp():
         step_sizes = [1e-2 * tf.ones_like(i) for i in initial_states]
         kernel = tfp.mcmc.TransformedTransitionKernel(
             tfp.mcmc.nuts.NoUTurnSampler(
-                target_log_prob_fn=lambda *args: self.model.log_prob(args), step_size=step_sizes
+                target_log_prob_fn=lambda *args: self.model.log_prob(args),
+                step_size=step_sizes,
             ),
             bijector=self.model.parameter_bijectors(),
         )
@@ -140,13 +176,15 @@ class Stan2tfp():
             num_burnin_steps=num_warmup_iters,
             current_state=[
                 bijector.forward(state)
-                for bijector, state in zip(self.model.parameter_bijectors(), initial_states)
+                for bijector, state in zip(
+                    self.model.parameter_bijectors(), initial_states
+                )
             ],
             kernel=kernel,
         )
 
         return mcmc_trace, pkr
-    
+
     def merge_chains(self, a):
         """Merge samples from different chains to a single numpy array
         
@@ -159,7 +197,7 @@ class Stan2tfp():
         -------
         ndarray
             samples, shape (n_chains * n_iter, ...)
-        """        
+        """
         return np.reshape(a, a.shape[0] * a.shape[1] + a.shape[2:])
 
     def get_tfp_code(self):
@@ -169,7 +207,7 @@ class Stan2tfp():
         -------
         string
             the TFP model
-        """        
+        """
         return self.tfp_code.decode("UTF-8")
 
     def save_tfp_code(self, fname):
@@ -179,17 +217,9 @@ class Stan2tfp():
         ----------
         fname : string
             output file in which to save the model
-        """        
+        """
         with open(fname, "w") as f:
             f.writelines(self.get_tfp_code())
-
-    def _set_compiler_path(self):
-        plat = sys.platform
-        if plat not in ['darwin', 'linux', 'win32']:
-            raise OSError("OS {} is not supported".format(plat))
-        self.compiler_path = pkg_resources.resource_filename(
-            __name__, "/bin/{}-stan2tfp.exe".format(plat)
-        )
 
     def _tfp_from_stan_file(self, stan_file_path):
         cmd = [self.compiler_path, stan_file_path]
@@ -197,9 +227,9 @@ class Stan2tfp():
         proc = run(cmd, stdout=PIPE, stderr=PIPE)
         tfp_code = proc.stdout
         return tfp_code
-    
+
     def _tfp_from_stan_model_code(self, stan_model_code):
-        fd, path = tempfile.mkstemp(prefix="name",suffix="asda")
+        fd, path = tempfile.mkstemp(prefix="name", suffix="asda")
         with open(fd, "w") as f:
             f.write(stan_model_code)
         tfp_code = self._tfp_from_stan_file(path)
