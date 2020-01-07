@@ -11,16 +11,11 @@ with open("README.rst") as readme_file:
 with open("HISTORY.rst") as history_file:
     history = history_file.read()
 
-# requirements = [
-#     "Click>=7.0",
-# ]
-
-# with open('requirements.txt') as f:
 requirements = [
     "pip",
     "numpy",
     "gast==0.2.2",
-    "tf-nightly-2.0-preview",
+    "tensorflow",
     "tfp-nightly",
     "bump2version==0.5.11",
     "wheel==0.33.6",
